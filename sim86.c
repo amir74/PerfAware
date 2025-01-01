@@ -1,130 +1,85 @@
-#include <stdint.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <stdarg.h>
-#include <string.h>
+#include <stdint.h>
 #include <assert.h>
+#include <stdlib.h>
 
-#define MOV_MASK 0b100010
-#define MOV_D_MASK 0x2
-#define MOV_W_MASK 0x1
-#define MOV_RREG_MASK 0b111
-#define MOV_LREG_MASK 0b111000
+//types
+typedef int8_t i8;
+typedef int16_t i16;
+typedef int32_t i32;
+typedef int64_t i64;
 
-typedef uint8_t uint8;
-typedef uint8_t bool8;
-typedef uint16_t uint16;
-typedef uint32_t uint32;
-typedef signed char int8;
-typedef signed short int16;
-typedef enum { AL = 0, CL, DL, BL, AH, CH, DH, BH, Reg8_COUNT} Reg8;
-typedef enum { AX = 0, CX, DX, BX, SP, BP, SI, DI, Reg16_COUNT} Reg16;
+typedef uint8_t u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
 
-typedef struct {
-	uint8* current;
-	uint8* end;
-	size_t size;
-} Byte_Stream;
+typedef float f32;
+typedef double f64;
 
-static const char* reg8_names[Reg8_COUNT] = { "al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"};
-static const char* reg16_names[Reg16_COUNT] = { "ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};
-static const char** reg_table[] = { &reg8_names[0], &reg16_names[0] };
+struct InstructionStream {
+    u8 at;
+    u8 *bytes;
+    u32 size;
+};
 
-bool8
-read_byte(Byte_Stream* stream, uint8* out)
-{
-	if(stream->current == stream->end)
-	{
-		return 0; 
-	}
-	
-	*out = *(stream->current);
-	stream->current++;
-	
-	return 1;
+InstructionStream read_file(char *path) {
+    FILE *f = fopen(path, "rb");
+    InstructionStream res = {0};
+    if (f == nullptr) {
+        assert(!"file not found");
+        return res;
+    }
+    fseek(f, 0, SEEK_END);
+    res.size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    res.bytes = (u8 *)malloc(res.size);
+    fread(res.bytes, 1, res.size,f);
+    fclose(f);
+    return res;
 }
 
-Byte_Stream
-read_file(const char* filepath)
-{
-	Byte_Stream result = {0};
-	FILE* file = fopen(filepath, "rb");
-	
-	if(file)
-	{
-		fseek(file, 0, SEEK_END);
-		size_t file_size = ftell(file);
-		fseek(file, 0, SEEK_SET);
-		
-		void* data = malloc(file_size);
-		
-		if(data)
-		{
-			if( fread(data, 1, file_size, file) == file_size)
-			{
-				result.current = (uint8*)data;
-				result.end     = result.current + file_size;
-				result.size    = file_size;
-			}
-		}
-		fclose(file);
-	}
-	return result;
+enum Register_Code_0 { AL, CL, DL, BL, AH, CH, DH, BH };
+enum Register_Code_1 { AX, CX, DX, BX, SP, BP, SI, DI };
+char* Register_Code_0_str[] = {"al", "cl", "dl", "bl", "ah", "ch", "dh", "bh"};
+char* Register_Code_1_str[] = {"ax", "cx", "dx", "bx", "sp", "bp", "si", "di"};
+
+enum OPCode {
+    mov_reg  = 0b10001000,
+    mov_reg_mask = 0b11111100
+};
+
+enum ModeType{
+    MOD_reg = 0b11000000
+};
+
+void parse_mov_regular(InstructionStream *inst){
+    u8 byte[2] = {inst->bytes[inst->at] ,inst->bytes[inst->at+1]};
+    bool W = byte[0] & 0b00000001;
+    bool D = byte[0] & 0b00000010;
+    u8 MOD = byte[1] & 0b11000000;
+    u8 REG = (byte[1] & 0b00111000) >> 3;
+    u8 RM  = byte[1] &  0b00000111;
+    char** reg_str = W ? Register_Code_1_str : Register_Code_0_str;
+
+    if (MOD == MOD_reg){
+        printf("mov %s, %s\n", D ? reg_str[REG] : reg_str[RM], D ? reg_str[RM] : reg_str[REG] );
+    }
+
+    inst->at+=2;
 }
 
-void
-destroy_byte_stream(Byte_Stream*  stream)
-{
-	uint8* memory = stream->end - stream->size;
-	free(memory);
-}
+int main(int argc, char **argv){
 
-int 
-main( int argc, char* argv[])
-{
-	if(argc !=2)
-	{
-		printf("expected 2 arguments");
-		return 1;
-	}
-	
-	Byte_Stream stream = read_file(argv[1]);
-	
-	puts("bits 16");
-	
-	uint8 byte = 0;
-	while (read_byte(&stream, &byte) )
-	{
-		switch ( byte >> 2)
-		{
-			case MOV_MASK: {
-				bool8 to_register_direction = (byte & MOV_D_MASK);
-				uint8 is_wide_op = (byte & MOV_W_MASK);
-				
-				if( !read_byte(&stream, &byte) )
-				{
-					printf("read_byte failed");
-					return -1;
-				}
-				const char* left_reg = reg_table[is_wide_op][(byte & MOV_LREG_MASK) >> 3];
-				const char* right_reg = reg_table[is_wide_op][byte & MOV_RREG_MASK];
-				
-				if (!to_register_direction)
-				{
-					const char *tmp = left_reg;
-					left_reg = right_reg;
-					right_reg = tmp;
-				}
-				
-				printf("mov %s, %s\n", left_reg, right_reg);
-			}break;
-			
-			default: {
-				fprintf(stderr, "unsupported opcode: 0x%x", byte);
-				return -1;
-			}
-		}
-	}
-	destroy_byte_stream(&stream);
-	return 0;
+    InstructionStream inst = read_file(argv[1]);
+
+    printf("bits 16\n\n");
+
+    while (inst.at < inst.size){
+        if(check_mask(inst.bytes[inst.at], mov_reg_mask, mov_reg)){
+            parse_mov_regular(&inst);
+        }
+    }
+
+    return 0;
 }
